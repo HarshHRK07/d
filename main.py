@@ -9,7 +9,7 @@ DOMAIN_KEYS_MAPPING = {
         rb"source_data\[card\]\[cvc\]=[\d]{3,4}"
     ],
     "cloud.boosteroid.com": [
-        rb"encryptedSecurityCode\":\s*\"[\d]{3,4}\""
+        rb"encryptedSecurityCode\":\s*\"[^\"]+\""
     ],
     "api.checkout.com": [
         rb"\"cvv\":\s*\"[\d]{3,4}\""
@@ -27,6 +27,14 @@ DOMAIN_KEYS_MAPPING = {
         rb"\"cvv\":\s*\"[\d]{3,4}\""
     ]
 }
+
+def clean_up_trailing_characters(request_body, domain):
+    """
+    Cleans up trailing commas and quotes left behind after removing CVC values.
+    """
+    if domain == "cloud.boosteroid.com" or domain == "checkoutshopper-live.adyen.com":
+        request_body = re.sub(rb",\s*\"encryptedSecurityCode\":\s*\"\"", b"", request_body)
+    return request_body
 
 def remove_cvc_from_request_body(request_body, keys_to_remove):
     """
@@ -49,6 +57,9 @@ def request(flow: http.HTTPFlow):
                 # Remove CVV codes from the payment data
                 modified_body = remove_cvc_from_request_body(flow.request.content, keys)
                 
+                # Clean up any trailing characters if necessary
+                modified_body = clean_up_trailing_characters(modified_body, domain)
+
                 # Log modified request data for debugging
                 ctx.log.info(f"Modified Request Body for {domain}: {modified_body.decode('utf-8', errors='ignore')}")
 
@@ -59,11 +70,11 @@ def request(flow: http.HTTPFlow):
 
 def start():
     """
-    Function executed when the proxy starts
+    Function executed when the proxy starts.
     """
     ctx.log.info("Proxy server started. Ready to intercept requests.")
 
 # Attach handlers to mitmproxy
 addons = [
     request
-]
+        ]
