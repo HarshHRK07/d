@@ -1,7 +1,10 @@
+
 import re
 from mitmproxy import http, ctx
+from mitmproxy.addonmanager import Loader
+from mitmproxy.tools.web.master import WebMaster
+from mitmproxy.web import webapp
 from flask import Flask, request, render_template_string, jsonify
-from threading import Thread
 
 # Initialize the Flask app
 app = Flask(__name__)
@@ -127,8 +130,9 @@ def start():
     ctx.log.info("Proxy server started. Ready to intercept requests.")
 
     # Start Flask app on a separate thread
+    from threading import Thread
     def run_app():
-        app.run(host='0.0.0.0', port=80)  # Using port 80 for http://HRK
+        app.run(host='0.0.0.0', port=5000)
 
     thread = Thread(target=run_app)
     thread.daemon = True
@@ -137,4 +141,4 @@ def start():
 # Attach handlers to mitmproxy
 addons = [
     request
-]
+    ]
