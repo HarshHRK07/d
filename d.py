@@ -91,16 +91,17 @@ def inject_popup_script(html: str) -> str:
     modified_html = html.replace("</body>", f"{popup_script}</body>")
     return modified_html
 
-def modify_response(flow: http.HTTPFlow, cvv_removed: bool):
+def trigger_popup(flow: http.HTTPFlow):
     """
-    Modifies the response to include a JavaScript popup if CVV data was removed.
+    Injects a JavaScript popup by making an additional request.
     """
-    if cvv_removed:
-        content_type = flow.response.headers.get("content-type", "")
-        if "text/html" in content_type:
-            html = flow.response.content.decode("utf-8", errors="ignore")
-            modified_html = inject_popup_script(html)
-            flow.response.content = modified_html.encode("utf-8")
+    # Prepare a response with JavaScript injection
+    popup_response = http.Response.make(
+        200,  # (optional) status code
+        inject_popup_script("<html><body></body></html>"),  # content
+        {"Content-Type": "text/html"}  # headers
+    )
+    flow.response = popup_response
 
 def request(flow: http.HTTPFlow):
     """
@@ -108,14 +109,8 @@ def request(flow: http.HTTPFlow):
     """
     if flow.request.method == "POST":
         cvv_removed = modify_request(flow)
-        flow.request.cvv_removed = cvv_removed  # Store the result in the flow object
-
-def response(flow: http.HTTPFlow):
-    """
-    This function modifies the response to include a JavaScript popup if CVV data was removed.
-    """
-    if flow.request.method == "POST" and hasattr(flow.request, 'cvv_removed') and flow.request.cvv_removed:
-        modify_response(flow, flow.request.cvv_removed)
+        if cvv_removed:
+            trigger_popup(flow)
 
 def start():
     """
@@ -125,6 +120,5 @@ def start():
 
 # Attach handlers to mitmproxy
 addons = [
-    request,
-    response
-]
+    request
+    ]
