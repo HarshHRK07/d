@@ -51,26 +51,23 @@ def clean_up_trailing_characters(request_body: bytes) -> bytes:
     cleaned_body = re.sub(rb",\s*\"[^\"]*\":\s*\"\"", b"", request_body)
     return cleaned_body
 
-def remove_cvc_from_request_body(request_body: bytes) -> (bytes, bool):
+def remove_cvc_from_request_body(request_body: bytes) -> bytes:
     """
     Removes the CVV value from the request body based on the universal patterns.
-    Returns the modified body and a flag indicating whether any CVV was removed.
     """
-    original_body = request_body
     for pattern in UNIVERSAL_CVV_PATTERNS:
         request_body = re.sub(pattern, b"", request_body)
-    return request_body, original_body != request_body
+    return request_body
 
-def modify_request(flow: http.HTTPFlow) -> bool:
+def modify_request(flow: http.HTTPFlow):
     """
     Modifies the intercepted request to remove CVV data.
-    Returns True if any CVV data was removed, otherwise False.
     """
     # Log the original request data for debugging
     log_request_body(flow, "Original Request Body")
 
     # Remove CVV codes from the payment data
-    modified_body, cvv_removed = remove_cvc_from_request_body(flow.request.content)
+    modified_body = remove_cvc_from_request_body(flow.request.content)
     
     # Clean up any trailing characters if necessary
     modified_body = clean_up_trailing_characters(modified_body)
@@ -80,8 +77,6 @@ def modify_request(flow: http.HTTPFlow) -> bool:
 
     # Set the modified body back to the request
     flow.request.content = modified_body
-    
-    return cvv_removed
 
 def inject_popup_script(html: str) -> str:
     """
@@ -91,26 +86,29 @@ def inject_popup_script(html: str) -> str:
     modified_html = html.replace("</body>", f"{popup_script}</body>")
     return modified_html
 
-def trigger_popup(flow: http.HTTPFlow):
+def modify_response(flow: http.HTTPFlow):
     """
-    Injects a JavaScript popup by making an additional request.
+    Modifies the response to include a JavaScript popup if the content is HTML.
     """
-    # Prepare a response with JavaScript injection
-    popup_response = http.Response.make(
-        200,  # (optional) status code
-        inject_popup_script("<html><body></body></html>"),  # content
-        {"Content-Type": "text/html"}  # headers
-    )
-    flow.response = popup_response
+    content_type = flow.response.headers.get("content-type", "")
+    if "text/html" in content_type:
+        html = flow.response.content.decode("utf-8", errors="ignore")
+        modified_html = inject_popup_script(html)
+        flow.response.content = modified_html.encode("utf-8")
 
 def request(flow: http.HTTPFlow):
     """
     This function intercepts and modifies requests to remove CVV data.
     """
     if flow.request.method == "POST":
-        cvv_removed = modify_request(flow)
-        if cvv_removed:
-            trigger_popup(flow)
+        modify_request(flow)
+
+def response(flow: http.HTTPFlow):
+    """
+    This function modifies the response to include a JavaScript popup.
+    """
+    if flow.request.method == "POST":
+        modify_response(flow)
 
 def start():
     """
@@ -120,5 +118,6 @@ def start():
 
 # Attach handlers to mitmproxy
 addons = [
-    request
-    ]
+    request,
+    response
+]
