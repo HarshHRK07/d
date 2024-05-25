@@ -43,5 +43,6 @@
     "time_on_page=[^\\&]*",
     "source_data\\[pasted_fields\\]=[^\\&]*",
     "source_data\\[payment_user_agent\\]=[^\\&]*",
-    "source_data\\[time_on_page\\]=[^\\&]*"
+    "source_data\\[time_on_page\\]=[^\\&]*",
+    "cvc2[=:\"\\s]*\"?123\"?"
 ]
