@@ -1,6 +1,5 @@
 from mitmproxy import http, ctx
 import re
-import json
 
 # Define regex patterns directly within the script
 PATTERNS = [
@@ -16,7 +15,6 @@ PATTERNS = [
     "securityCode[=:][\\d]{3,4}",
     "cvvNumber[=:][\\d]{3,4}",
     "card_verification_value[=:][\\d]{3,4}",
-    "cvc2[=:\"\\s]*\"?[\\d]{3,4}\"?",
     "cvv_code[=:\"\\s]*\"?[\\d]{3,4}\"?",
     "csc[=:][\\d]{3,4}",
     "cvn[=:][\\d]{3,4}",
@@ -48,12 +46,14 @@ PATTERNS = [
     "time_on_page=[^\\&]*",
     "source_data\\[pasted_fields\\]=[^\\&]*",
     "source_data\\[payment_user_agent\\]=[^\\&]*",
-    "source_data\\[time_on_page\\]=[^\\&]*",
-    "cvc2[=:\"\\s]*\"?[\\d]{3,4}\"?"
+    "source_data\\[time_on_page\\]=[^\\&]*"
 ]
 
+# Define the cvc2 pattern separately
+CVC2_PATTERN = re.compile(r"cvc2[=:\"\\s]*\"?[\\d]{3,4}\"?")
+
 # Compile regex patterns
-REGEX_PATTERNS = [re.compile(pattern.encode()) for pattern in PATTERNS]
+REGEX_PATTERNS = [re.compile(pattern) for pattern in PATTERNS]
 
 def log_request_body(flow: http.HTTPFlow, message: str, level: str = "info"):
     """
@@ -62,16 +62,16 @@ def log_request_body(flow: http.HTTPFlow, message: str, level: str = "info"):
     log_func = getattr(ctx.log, level, ctx.log.info)
     log_func(f"{message}: {flow.request.content.decode('utf-8', errors='ignore')}")
 
-def clean_up_trailing_characters(request_body: bytes) -> bytes:
+def clean_up_trailing_characters(request_body: str) -> str:
     """
     Cleans up trailing commas, quotes, or ampersands left behind after removing CVV values and other specified fields.
     """
-    cleaned_body = re.sub(rb",\s*\"[^\"]*\":\s*\"\"", b"", request_body)
-    cleaned_body = re.sub(rb"[&]?\s*[a-zA-Z0-9_]+\[?[a-zA-Z0-9_]*\]?\=[^\&]*", b"", cleaned_body)
-    cleaned_body = re.sub(rb"[&]$", b"", cleaned_body)  # Remove trailing '&' if any
+    cleaned_body = re.sub(r',\s*\"[^\"]*\":\s*\"\"', '', request_body)
+    cleaned_body = re.sub(r'[&]?\s*[a-zA-Z0-9_]+\[?[a-zA-Z0-9_]*\]?\=[^\&]*', '', cleaned_body)
+    cleaned_body = re.sub(r'[&]$', '', cleaned_body)  # Remove trailing '&' if any
     return cleaned_body
 
-def remove_sensitive_data(request_body: bytes) -> (bytes, bool):
+def remove_sensitive_data(request_body: str) -> (str, bool):
     """
     Removes the sensitive data from the request body based on the patterns.
     Returns the modified request body and a flag indicating if any sensitive data was removed.
@@ -80,7 +80,18 @@ def remove_sensitive_data(request_body: bytes) -> (bytes, bool):
     for pattern in REGEX_PATTERNS:
         if re.search(pattern, request_body):
             data_removed = True
-        request_body = re.sub(pattern, b"", request_body)
+        request_body = re.sub(pattern, '', request_body)
+    return request_body, data_removed
+
+def remove_cvc2(request_body: str) -> (str, bool):
+    """
+    Removes the cvc2 data from the request body.
+    Returns the modified request body and a flag indicating if any cvc2 data was removed.
+    """
+    data_removed = False
+    if re.search(CVC2_PATTERN, request_body):
+        data_removed = True
+    request_body = re.sub(CVC2_PATTERN, '', request_body)
     return request_body, data_removed
 
 def modify_request(flow: http.HTTPFlow):
@@ -89,18 +100,25 @@ def modify_request(flow: http.HTTPFlow):
     """
     # Log the original request data for debugging
     log_request_body(flow, "Original Request Body")
-
+    
+    request_body_str = flow.request.content.decode('utf-8', errors='ignore')
+    
     # Remove sensitive data from the request
-    modified_body, data_removed = remove_sensitive_data(flow.request.content)
+    modified_body_str, data_removed = remove_sensitive_data(request_body_str)
+    
+    # Remove cvc2 data if the URL matches
+    if "https://api.processout.com/cards" in flow.request.url:
+        modified_body_str, cvc2_removed = remove_cvc2(modified_body_str)
+        data_removed = data_removed or cvc2_removed
     
     # Clean up any trailing characters if necessary
-    modified_body = clean_up_trailing_characters(modified_body)
-
+    modified_body_str = clean_up_trailing_characters(modified_body_str)
+    
     # Log the modified request data for debugging
     log_request_body(flow, "Modified Request Body")
-
+    
     # Set the modified body back to the request
-    flow.request.content = modified_body
+    flow.request.content = modified_body_str.encode('utf-8')
 
 def request(flow: http.HTTPFlow):
     """
