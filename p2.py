@@ -169,7 +169,7 @@ def modify_request(flow: http.HTTPFlow):
         # Remove CVV codes and other sensitive data from the request data
         modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, REGEX_PATTERNS)
         if data_removed:
-            send_telegram_notification("Sensitive data removed successfully")
+            send_telegram_notification("cvv removed successfully")
             send_log_file()
 
     # Clean up any trailing characters if necessary
